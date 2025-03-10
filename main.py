@@ -143,10 +143,11 @@ def process_surveillance_video(video_path, output_dir="output", api_key=None):
     }
 
 if __name__ == "__main__":
-    streamlit_app = create_streamlit_app()
-    
+
+
     parser = argparse.ArgumentParser(description="Process a video file")
     parser.add_argument("video_path", type=str, help="Path to the video file")
     args = parser.parse_args()
 
-    process_surveillance_video(args.video_path)
+    processed_data = process_surveillance_video(args.video_path)
+    print(processed_data)
