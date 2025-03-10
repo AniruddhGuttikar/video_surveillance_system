@@ -1,0 +1,8 @@
+anthropic
+numpy
+opencv-python
+Pillow
+ultralytics
+sentence-transformers
+streamlit
+pinecone-client
