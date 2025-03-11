@@ -1,36 +1,19 @@
 import os
-import cv2
-import numpy as np
-import datetime
 import time
-import subprocess
-import torch
-from ultralytics import YOLO
-from PIL import Image
-import json
-import pandas as pd
-from sklearn.ensemble import IsolationForest
-import anthropic
-from typing import List, Dict, Any, Tuple
-import pinecone
-from sentence_transformers import SentenceTransformer
-import streamlit as st
-from pathlib import Path
-import re
+from typing import List, Dict, Any
+from google import genai
 
-
-# ========== 5. LLM INTEGRATION ==========
-
-class SurveillanceLLM:
-    def __init__(self, api_key, model="claude-3.5-sonnet-20240307"):
+class SurveillanceGeminiLLM:
+    def __init__(self, api_key, model="gemini-2.0-flash"):
         """
-        Initialize the LLM integration
+        Initialize the LLM integration with Google Gemini
         
         Args:
-            api_key: API key for Claude or other LLM
-            model: Model to use
+            api_key: API key for Google Gemini
+            model: Model to use (default: gemini-2.0-flash)
         """
-        self.client = anthropic.Anthropic(api_key=api_key)
+        # genai.configure(api_key=api_key)
+        self.client = genai.Client(api_key=api_key)
         self.model = model
         self.system_prompt = """
         You are an AI assistant analyzing surveillance footage. Your task is to:
@@ -72,16 +55,14 @@ class SurveillanceLLM:
                 prompt += f"- {ctx_time}: {ctx_event['type']} ({ctx_event.get('class_name', 'Unknown')})\n"
         
         try:
-            response = self.client.messages.create(
+            response = self.client.models.generate_content(
                 model=self.model,
-                system=self.system_prompt,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=150
+                contents=[
+                    {"role": "user", "parts": [{"text": self.system_prompt + "\n\n" + prompt}]}
+                ]
             )
             
-            return response.content[0].text
+            return response.candidates[0].content.parts[0].text
         except Exception as e:
             print(f"Error generating event description: {e}")
             return f"Event: {event['type']} at {event_time}"
@@ -116,20 +97,15 @@ class SurveillanceLLM:
                 prompt += f"- Confidence: {event.get('confidence', 'N/A')}\n"
                 prompt += f"- Position: {event.get('bbox', 'N/A')}\n\n"
             
-            # prompt += "For each event, provide a one-sentence description in the natural language format"
-            
             try:
-                # Use Claude Sonnet which has lower token usage
-                response = self.client.messages.create(
+                response = self.client.models.generate_content(
                     model=self.model,
-                    system="You are a surveillance system analyst. Your task is to describe security events concisely and professionally.",
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_tokens=batch_size * 75
+                    contents=[
+                        {"role": "user", "parts": [{"text": "You are a surveillance system analyst. Your task is to describe security events concisely and professionally.\n\n" + prompt}]}
+                    ]
                 )
-                
-                result_text = response.content[0].text
+                print("response from the gemini: ", response)
+                result_text = response.candidates[0].content.parts[0].text
                 
                 # Parse the response to extract individual descriptions
                 for idx, event in enumerate(batch):
@@ -146,7 +122,7 @@ class SurveillanceLLM:
                         descriptions[id(event)] = f"Event: {event['type']} at {event_time}"
                 
                 # Respect rate limits - wait if necessary
-                time.sleep(12 / batch_size)  # To stay under 5 requests per minute
+                time.sleep(1)  # Adjust based on Gemini's rate limits
                 
             except Exception as e:
                 print(f"Error generating batch descriptions: {e}")
@@ -206,16 +182,14 @@ class SurveillanceLLM:
         """
         
         try:
-            response = self.client.messages.create(
+            response = self.client.models.generate_content(
                 model=self.model,
-                system=self.system_prompt,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=300
+                contents=[
+                    {"role": "user", "parts": [{"text": self.system_prompt + "\n\n" + prompt}]}
+                ]
             )
             
-            return response.content[0].text
+            return response.candidates[0].content.parts[0].text
         except Exception as e:
             print(f"Error generating summary: {e}")
             return f"Summary of {len(events)} events during {time_period}."
@@ -257,29 +231,28 @@ class SurveillanceLLM:
         """
         
         try:
-            response = self.client.messages.create(
+            response = self.client.models.generate_content(
                 model=self.model,
-                system=self.system_prompt,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=500
+                contents=[
+                    {"role": "user", "parts": [{"text": self.system_prompt + "\n\n" + prompt}]}
+                ]
             )
             
-            return response.content[0].text
+            return response.candidates[0].content.parts[0].text
         except Exception as e:
             print(f"Error answering query: {e}")
             return "I'm sorry, I couldn't process that query about the surveillance footage."
         
     def test_llm(self):
-        print("Testing the connection with the Claude LLM")
+        print("Testing the connection with the Gemini LLM")
         prompt = "Hello How are you doing today"
-        response = self.client.messages.create(
-            model=self.model,
-            system="You are a surveillance system analyst. Your task is to describe security events concisely and professionally.",
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=100
-        )
-        print(response)
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[
+                    {"role": "user", "parts": [{"text": "You are a surveillance system analyst. Your task is to describe security events concisely and professionally.\n\n" + prompt}]}
+                ]
+            )
+            print(response.candidates[0].content.parts[0].text)
+        except Exception as e:
+            print(f"Error testing Gemini connection: {e}")

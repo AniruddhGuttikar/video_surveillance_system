@@ -7,3 +7,4 @@ sentence-transformers
 streamlit
 pinecone
 python-dotenv
+google-genai
