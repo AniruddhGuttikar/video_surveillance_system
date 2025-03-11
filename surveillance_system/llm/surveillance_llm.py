@@ -22,7 +22,7 @@ import re
 # ========== 5. LLM INTEGRATION ==========
 
 class SurveillanceLLM:
-    def __init__(self, api_key, model="claude-3-opus-20240229"):
+    def __init__(self, api_key, model="claude-3.5-sonnet-20240307"):
         """
         Initialize the LLM integration
         
@@ -85,6 +85,77 @@ class SurveillanceLLM:
         except Exception as e:
             print(f"Error generating event description: {e}")
             return f"Event: {event['type']} at {event_time}"
+    
+    def generate_batch_event_descriptions(self, events, batch_size=10):
+        """
+        Generate descriptions for multiple events in a single API call
+        
+        Args:
+            events: List of event dictionaries
+            batch_size: Number of events to process in each API call
+        
+        Returns:
+            Dictionary mapping event IDs to descriptions
+        """
+        descriptions = {}
+        
+        # Process events in batches
+        for i in range(0, len(events), batch_size):
+            batch = events[i:i+batch_size]
+            
+            # Create a comprehensive prompt for all events in the batch
+            prompt = "Please describe each of the following surveillance events concisely:\n\n"
+            
+            for idx, event in enumerate(batch):
+                event_time = str(event['timestamp'])
+                prompt += f"EVENT {idx+1}:\n"
+                prompt += f"- Time: {event_time}\n"
+                prompt += f"- Type: {event['type']}\n"
+                prompt += f"- Subtype: {event.get('subtype', 'N/A')}\n"
+                prompt += f"- Object: {event.get('class_name', 'Unknown')}\n"
+                prompt += f"- Confidence: {event.get('confidence', 'N/A')}\n"
+                prompt += f"- Position: {event.get('bbox', 'N/A')}\n\n"
+            
+            prompt += "For each event, provide a one-sentence description in the format 'EVENT 1: [description]'"
+            
+            try:
+                # Use Claude Sonnet which has lower token usage
+                response = self.client.messages.create(
+                    model=self.model,
+                    system="You are a surveillance system analyst. Your task is to describe security events concisely and professionally.",
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=batch_size * 75
+                )
+                
+                result_text = response.content[0].text
+                
+                # Parse the response to extract individual descriptions
+                for idx, event in enumerate(batch):
+                    event_marker = f"EVENT {idx+1}:"
+                    next_marker = f"EVENT {idx+2}:" if idx < len(batch)-1 else None
+                    
+                    if event_marker in result_text:
+                        start_pos = result_text.find(event_marker) + len(event_marker)
+                        end_pos = result_text.find(next_marker) if next_marker else None
+                        
+                        description = result_text[start_pos:end_pos].strip()
+                        descriptions[id(event)] = description
+                    else:
+                        descriptions[id(event)] = f"Event: {event['type']} at {event_time}"
+                
+                # Respect rate limits - wait if necessary
+                time.sleep(12 / batch_size)  # To stay under 5 requests per minute
+                
+            except Exception as e:
+                print(f"Error generating batch descriptions: {e}")
+                # Fallback: provide simple descriptions
+                for event in batch:
+                    event_time = str(event['timestamp'])
+                    descriptions[id(event)] = f"Event: {event['type']} at {event_time}"
+        
+        return descriptions
     
     def generate_summary(self, events, time_period="the entire recording"):
         """

@@ -4,6 +4,7 @@ import numpy as np
 import datetime
 import time
 import subprocess
+import sklearn
 import torch
 from ultralytics import YOLO
 from PIL import Image
@@ -182,13 +183,19 @@ class DetectionSystem:
         # Train the model if needed
         if len(self.anomaly_features) == 100:
             self.anomaly_detector.fit(self.anomaly_features)
+        # print("number of anamoly features: ", len(self.anomaly_features))
+        try:
+            # Quick check to see if the model is fitted
+            self.anomaly_detector.offset_  # This will raise NotFittedError if not fitted
+        except (AttributeError, sklearn.exceptions.NotFittedError):
+            # Model is not fitted, so fit it now
+            print("Fitting anomaly detector model with", len(self.anomaly_features), "features")
+            self.anomaly_detector.fit(self.anomaly_features)
         
         # Predict anomalies
-        if len(self.anomaly_features) >= 100:
-            # Get the latest features only
-            latest_features = features
-            if latest_features:
-                predictions = self.anomaly_detector.predict(latest_features)
+        if features:  # Make sure we have features to predict on
+            try:
+                predictions = self.anomaly_detector.predict(features)
                 
                 # Find anomalous tracks
                 anomalies = []
@@ -197,6 +204,9 @@ class DetectionSystem:
                         anomalies.append(tracks[i])
                 
                 return anomalies
+            except Exception as e:
+                print(f"Error predicting anomalies: {e}")
+                return []
         
         return []
 

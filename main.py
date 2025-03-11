@@ -18,6 +18,12 @@ import streamlit as st
 from pathlib import Path
 import re
 import argparse
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
 # Import functions from surveillance_system modules
 from surveillance_system.video.processor import (
@@ -74,6 +80,7 @@ def process_surveillance_video(video_path, output_dir="output", api_key=None):
 
     # Initialize required classes
     video_info = extract_video_info(video_path)
+    print("video info: ", video_info)
 
     event_processor = EventProcessor(video_info)
     detection_system = DetectionSystem()
@@ -81,38 +88,55 @@ def process_surveillance_video(video_path, output_dir="output", api_key=None):
     # Rest of the pipeline remains the same but using initialized classes
     print("Extracting frames...")
     frames_dir = os.path.join(output_dir, "frames")
-    frame_paths = extract_frames(video_path, frames_dir)
+    frames = extract_frames(video_path, frames_dir)
     
     print("Processing frames...")
     events = []
-    for i, frame_path in enumerate(frame_paths):
-        enhanced_frame = enhance_frame(frame_path)
-        timestamp = event_processor.frame_to_timestamp(i, video_info)
-        
-        # Use detection_system instance
-        detections = detection_system.detect_objects(enhanced_frame)
-        tracking_results = detection_system.track_objects(detections, i)
+    for i in range(0, len(frames), 5):
+        # print(f"index: {i}, frame_path: {frame_path}")
+        frame = frames[i]
+        frame = cv2.imread(frame["path"])
+        if frame is None:
+            print(f"Warning: Could not read image from {frame}, skipping...")
+            continue
+
+        enhanced_frame = enhance_frame(frame, False, False)
+
+        timestamp = event_processor.frame_to_timestamp(i)
+        print("Timestamp: ", timestamp)
+
+        results = detection_system.process_frame(enhanced_frame)
         
         # Use event_processor instance
-        processed_data = event_processor.process_detection_results(tracking_results, timestamp)
-        anomalies = event_processor.detect_anomalies(processed_data, tracking_results)
-        
-        for anomaly in anomalies:
-            event_processor.add_event(anomaly)
-            events.append(anomaly)
-            
+        # The EventProcessor.process_detection_results expects frame_idx and results
+        current_events = event_processor.process_detection_results(i, results)
+        events.extend(current_events)
+                
         if i % 100 == 0:
-            print(f"Processed {i}/{len(frame_paths)} frames")
+            print(f"Processed {i}/{len(frames)} frames")
+        
+    for event in events:
+        print(event)
     
     # Step 4: Generate event descriptions and summaries
-    surveillance_knowledge_base = SurveillanceKnowledgeBase()
-    surveillance_llm = SurveillanceLLM()
+    surveillance_knowledge_base = SurveillanceKnowledgeBase(api_key=PINECONE_API_KEY)
+    surveillance_llm = SurveillanceLLM(api_key=ANTHROPIC_API_KEY)
+
     print("Generating event descriptions...")
     event_descriptions = []
+    # for event in events:
+    #     description = surveillance_llm.generate_event_description(event)
+    #     event_descriptions.append(description)
+    event_descriptions_map = surveillance_llm.generate_batch_event_descriptions(events, batch_size=10)
+    event_descriptions = []
     for event in events:
-        description = surveillance_llm.generate_event_description(event, api_key)
-        event_descriptions.append(description)
+        description = event_descriptions_map.get(id(event), None)
+        if description:
+            event_descriptions.append(description)
     
+    for event_description in event_descriptions:
+        print(event_description)
+
     # Step 5: Generate overall summary
     print("Generating video summary...")
     summary = surveillance_llm.generate_summary(event_descriptions, video_info, api_key)
@@ -143,8 +167,6 @@ def process_surveillance_video(video_path, output_dir="output", api_key=None):
     }
 
 if __name__ == "__main__":
-
-
     parser = argparse.ArgumentParser(description="Process a video file")
     parser.add_argument("video_path", type=str, help="Path to the video file")
     args = parser.parse_args()

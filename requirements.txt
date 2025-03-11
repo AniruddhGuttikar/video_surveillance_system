@@ -5,4 +5,5 @@ Pillow
 ultralytics
 sentence-transformers
 streamlit
-pinecone-client
+pinecone
+python-dotenv

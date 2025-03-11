@@ -37,7 +37,7 @@ class EventProcessor:
         """Convert frame index to absolute timestamp"""
         if not self.video_info or 'fps' not in self.video_info:
             return None
-        
+        # print(f"frame_idx: {frame_idx}, video_info: {self.video_info['fps']}")
         seconds = frame_idx / self.video_info['fps']
         
         # If we have video start time, calculate absolute timestamp

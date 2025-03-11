@@ -12,7 +12,7 @@ import pandas as pd
 from sklearn.ensemble import IsolationForest
 import anthropic
 from typing import List, Dict, Any, Tuple
-import pinecone
+from pinecone import Pinecone, ServerlessSpec
 from sentence_transformers import SentenceTransformer
 import streamlit as st
 from pathlib import Path
@@ -29,19 +29,23 @@ class SurveillanceKnowledgeBase:
             api_key: Pinecone API key
             index_name: Name of the index to use
         """
-        # Initialize Pinecone
-        pinecone.init(api_key=api_key)
+        # Initialize Pinecone with new client
+        self.pc = Pinecone(api_key=api_key)
         
         # Check if index exists, create if not
-        if index_name not in pinecone.list_indexes():
-            pinecone.create_index(
+        if index_name not in self.pc.list_indexes().names():
+            self.pc.create_index(
                 name=index_name,
                 dimension=384,  # Dimension of sentence-transformers model
-                metric="cosine"
+                metric="cosine",
+                spec=ServerlessSpec(
+                    cloud='aws',
+                    region='us-east-1'
+                )
             )
         
         # Connect to index
-        self.index = pinecone.Index(index_name)
+        self.index = self.pc.Index(index_name)
         
         # Initialize embedding model
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -68,9 +72,15 @@ class SurveillanceKnowledgeBase:
         # Generate embedding for the description
         embedding = self.embedding_model.encode(description).tolist()
         
-        # Upsert to Pinecone
+        # Upsert to Pinecone with new syntax
         self.index.upsert(
-            vectors=[(str(event_id), embedding, metadata)]
+            vectors=[
+                {
+                    "id": str(event_id),
+                    "values": embedding,
+                    "metadata": metadata
+                }
+            ]
         )
     
     def query_events(self, query_text, top_k=5):
@@ -87,7 +97,7 @@ class SurveillanceKnowledgeBase:
         # Generate embedding for the query
         query_embedding = self.embedding_model.encode(query_text).tolist()
         
-        # Query Pinecone
+        # Query Pinecone with new syntax
         results = self.index.query(
             vector=query_embedding,
             top_k=top_k,
