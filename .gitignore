@@ -55,3 +55,4 @@ __pypackages__/
 
 yolov8x.pt
 output
+.autoenv.zsh

@@ -80,7 +80,7 @@ def process_surveillance_video(video_path, output_dir="output", api_key=None):
     os.makedirs(output_dir, exist_ok=True)
 
     surveillance_knowledge_base = SurveillanceKnowledgeBase(api_key=PINECONE_API_KEY)
-    surveillance_llm = SurveillanceLLM(api_key=ANTHROPIC_API_KEY)
+    # surveillance_llm = SurveillanceLLM(api_key=ANTHROPIC_API_KEY)
     surveillance_llm_gemini = SurveillanceGeminiLLM(api_key=GEMINI_API_KEY)
     
     print(surveillance_llm_gemini.test_llm())
@@ -153,32 +153,32 @@ def process_surveillance_video(video_path, output_dir="output", api_key=None):
 
     # Step 5: Generate overall summary
     print("Generating video summary...")
-    summary = surveillance_llm.generate_summary(event_descriptions, video_info, api_key)
+    summary = surveillance_llm_gemini.generate_events_summary(event_descriptions)
     
     # Step 6: Export events to file
     print("Exporting events...")
     events_output_path = os.path.join(output_dir, "events.json")
-    event_processor.export_events(events, events_output_path)
+    event_processor.export_events(event_descriptions, events_output_path)
     
     # Step 7: Save summary to file
     summary_path = os.path.join(output_dir, "summary.txt")
     with open(summary_path, "w") as f:
         f.write(summary)
     
-    # Step 8: Create Streamlit app for interactive exploration
-    print("Creating interactive app...")
-    app_path = os.path.join(output_dir, "app.py")
-    create_streamlit_app(video_path, frames_dir, events_output_path, summary_path, app_path)
+    # # Step 8: Create Streamlit app for interactive exploration
+    # print("Creating interactive app...")
+    # app_path = os.path.join(output_dir, "app.py")
+    # create_streamlit_app(video_path, frames_dir, events_output_path, summary_path, app_path)
     
-    print(f"Processing complete. Results saved to {output_dir}")
-    print(f"To launch the interactive app, run: streamlit run {app_path}")
+    # print(f"Processing complete. Results saved to {output_dir}")
+    # print(f"To launch the interactive app, run: streamlit run {app_path}")
     
-    return {
-        "video_info": video_info,
-        "events": events,
-        "summary": summary,
-        "output_dir": output_dir
-    }
+    # return {
+    #     "video_info": video_info,
+    #     "events": events,
+    #     "summary": summary,
+    #     "output_dir": output_dir
+    # }
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process a video file")

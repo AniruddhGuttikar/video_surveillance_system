@@ -23,7 +23,7 @@ class SurveillanceGeminiLLM:
         4. Focus on observable behaviors and patterns
         5. Use neutral, professional language
         
-        Format your responses concisely with timestamps, locations, and event descriptions.
+        Format your responses concisely with timestamps, locations, and event descriptions with objects and person(s) if involved.
         """
         
     def generate_event_description(self, event, context_events=[]):
@@ -66,7 +66,7 @@ class SurveillanceGeminiLLM:
         except Exception as e:
             print(f"Error generating event description: {e}")
             return f"Event: {event['type']} at {event_time}"
-    
+        
     def generate_batch_event_descriptions(self, events, batch_size=10):
         """
         Generate descriptions for multiple events in a single API call
@@ -85,7 +85,7 @@ class SurveillanceGeminiLLM:
             batch = events[i:i+batch_size]
             
             # Create a comprehensive prompt for all events in the batch
-            prompt = "Please describe each of the following surveillance events concisely by observing the relation between the objects present in the event and give a description for the batch of events:\n\n"
+            prompt = "Please describe each of the following surveillance events concisely in a SINGLE LINE by observing the relation between the objects present in the event. Format your response with EVENT 1: [description], EVENT 2: [description], etc. Focus on the most important aspects like detected object, anomaly status, and priority.\n\n"
             
             for idx, event in enumerate(batch):
                 event_time = str(event['timestamp'])
@@ -95,104 +95,114 @@ class SurveillanceGeminiLLM:
                 prompt += f"- Subtype: {event.get('subtype', 'N/A')}\n"
                 prompt += f"- Object: {event.get('class_name', 'Unknown')}\n"
                 prompt += f"- Confidence: {event.get('confidence', 'N/A')}\n"
-                prompt += f"- Position: {event.get('bbox', 'N/A')}\n\n"
+                prompt += f"- Position: {event.get('bbox', 'N/A')}\n"
+                prompt += f"- Priority: {event.get('priority', 'N/A')}\n\n"
             
             try:
                 response = self.client.models.generate_content(
                     model=self.model,
                     contents=[
-                        {"role": "user", "parts": [{"text": "You are a surveillance system analyst. Your task is to describe security events concisely and professionally.\n\n" + prompt}]}
+                        {"role": "user", "parts": [{"text": "You are a surveillance system analyst. Your task is to describe security events concisely and professionally in a single line per event.\n\n" + prompt}]}
                     ]
                 )
-                print("response from the gemini: ", response)
+                
                 result_text = response.candidates[0].content.parts[0].text
                 
-                # Parse the response to extract individual descriptions
-                for idx, event in enumerate(batch):
-                    event_marker = f"EVENT {idx+1}:"
-                    next_marker = f"EVENT {idx+2}:" if idx < len(batch)-1 else None
-                    
-                    if event_marker in result_text:
-                        start_pos = result_text.find(event_marker) + len(event_marker)
-                        end_pos = result_text.find(next_marker) if next_marker else None
+                # More robust parsing approach
+                # First, check if the response contains "EVENT" markers
+                if "EVENT" in result_text:
+                    # Try to extract descriptions using EVENT markers
+                    for idx, event in enumerate(batch):
+                        event_marker = f"EVENT {idx+1}:"
+                        next_marker = f"EVENT {idx+2}:" if idx < len(batch)-1 else None
                         
-                        description = result_text[start_pos:end_pos].strip()
-                        descriptions[id(event)] = description
-                    else:
-                        descriptions[id(event)] = f"Event: {event['type']} at {event_time}"
-                
-                # Respect rate limits - wait if necessary
-                time.sleep(1)  # Adjust based on Gemini's rate limits
+                        if event_marker in result_text:
+                            start_pos = result_text.find(event_marker) + len(event_marker)
+                            end_pos = result_text.find(next_marker) if next_marker and next_marker in result_text else None
+                            
+                            description = result_text[start_pos:end_pos].strip() if end_pos else result_text[start_pos:].strip()
+                            # Remove any bullet points, asterisks or newlines
+                            description = description.replace('*', '').replace('\n', ' ').strip()
+                            descriptions[id(event)] = description
+                        else:
+                            # Fallback for this specific event
+                            event_time = str(event['timestamp'])
+                            obj_type = event.get('class_name', 'Unknown')
+                            event_type = event['type']
+                            priority = event.get('priority', 'N/A')
+                            descriptions[id(event)] = f"{event_time}: {event_type.capitalize()} {obj_type} detected with {priority} priority."
+                else:
+                    # Alternative parsing approach for bulleted or asterisk lists
+                    lines = [line.strip() for line in result_text.split('\n') if line.strip()]
+                    description_lines = [line for line in lines if line.startswith('*') or line[0].isdigit() or ':' in line]
+                    
+                    # Match descriptions to events
+                    for idx, event in enumerate(batch):
+                        if idx < len(description_lines):
+                            # Clean up the description (remove bullets, asterisks)
+                            description = description_lines[idx].lstrip('*').lstrip('0123456789.').strip()
+                            descriptions[id(event)] = description
+                        else:
+                            # Fallback if we don't have enough descriptions
+                            event_time = str(event['timestamp'])
+                            obj_type = event.get('class_name', 'Unknown')
+                            event_type = event['type']
+                            priority = event.get('priority', 'N/A')
+                            descriptions[id(event)] = f"{event_time}: {event_type.capitalize()} {obj_type} detected with {priority} priority."
                 
             except Exception as e:
                 print(f"Error generating batch descriptions: {e}")
                 # Fallback: provide simple descriptions
                 for event in batch:
                     event_time = str(event['timestamp'])
-                    descriptions[id(event)] = f"Event: {event['type']} at {event_time}"
+                    obj_type = event.get('class_name', 'Unknown')
+                    event_type = event['type']
+                    priority = event.get('priority', 'N/A')
+                    descriptions[id(event)] = f"{event_time}: {event_type.capitalize()} {obj_type} detected with {priority} priority."
         
         return descriptions
     
-    def generate_summary(self, events, time_period="the entire recording"):
+    def generate_events_summary(self, event_descriptions: List, time_period="entire video"):
         """
-        Generate a summary of multiple events
+        Generate a summary of all events within a given time frame
         
         Args:
-            events: List of event dictionaries
-            time_period: Description of the time period
+            event_descriptions: Dictionary mapping event IDs to descriptions
+            time_period: Description of the time period (default is "entire video")
         
         Returns:
-            String summary of the events
+            A string summary of the events
         """
-        if not events:
-            return f"No events detected during {time_period}."
+        # Compile all descriptions into a single prompt
+        descriptions_text = "\n".join([f"- {desc}" for desc in event_descriptions])
         
-        # Count events by type
-        event_counts = {}
-        for event in events:
-            event_type = event['type']
-            event_counts[event_type] = event_counts.get(event_type, 0) + 1
-        
-        # Create a summary of event counts
-        counts_text = "\n".join([f"- {count} instances of {event_type}" 
-                                 for event_type, count in event_counts.items()])
-        
-        # Create a chronological list of significant events
-        significant_events = [e for e in events if e.get('priority') == 'high']
-        if not significant_events:
-            # If no high priority events, take a sample of regular events
-            significant_events = events[:min(5, len(events))]
-        
-        events_text = "\n".join([f"- At {e['timestamp']}: {e['type']} ({e.get('class_name', 'Unknown')})" 
-                                 for e in significant_events])
-        
-        prompt = f"""
-        Please provide a surveillance summary for {time_period}.
-        
-        Event statistics:
-        {counts_text}
-        
-        Significant events:
-        {events_text}
-        
-        Please provide:
-        1. A brief overview of the activity level
-        2. Key events that occurred
-        3. Any patterns or anomalies worth noting
-        """
+        prompt = f"""As a surveillance system analyst, create a concise summary of the following events detected during the {time_period}. 
+    Focus on patterns, significant events, anomalies, and high-priority incidents. 
+    Provide an overall assessment of the surveillance period.
+
+    EVENTS:
+    {descriptions_text}
+
+    Please provide:
+    1. A concise paragraph summarizing the key findings
+    2. Any patterns or trends observed
+    3. Highlight of high-priority or anomalous events
+    """
         
         try:
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[
-                    {"role": "user", "parts": [{"text": self.system_prompt + "\n\n" + prompt}]}
+                    {"role": "user", "parts": [{"text": prompt}]}
                 ]
             )
             
-            return response.candidates[0].content.parts[0].text
+            summary = response.candidates[0].content.parts[0].text
+            return summary
+            
         except Exception as e:
             print(f"Error generating summary: {e}")
-            return f"Summary of {len(events)} events during {time_period}."
+            return f"Summary generation failed: {e}"
     
     def answer_query(self, query, events, video_info):
         """

@@ -134,15 +134,14 @@ class EventProcessor:
         """Get events involving a specific object class"""
         return [e for e in self.events if e.get('class_name') == class_name]
     
-    def export_events(self, output_file="events.json"):
+    def export_events(self, events, output_file="events.json"):
         """Export events to a JSON file"""
         # Convert timestamps to strings for JSON serialization
         serializable_events = []
+        events = events if events else self.events
         
-        for event in self.events:
-            event_copy = event.copy()
-            event_copy['timestamp'] = str(event['timestamp'])
-            serializable_events.append(event_copy)
+        for event in events:
+            serializable_events.append(event)
         
         with open(output_file, 'w') as f:
             json.dump(serializable_events, f, indent=2)
