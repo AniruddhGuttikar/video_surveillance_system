@@ -35,6 +35,8 @@ from surveillance_system.video.processor import (
 from surveillance_system.event.processor import EventProcessor
 from surveillance_system.event.detector import DetectionSystem
 
+from surveillance_system.event.action_integration import ActionIntegrator
+
 from surveillance_system.llm.surveillance_knowledge_base import SurveillanceKnowledgeBase
 from surveillance_system.llm.surveillance_llm import SurveillanceLLM
 from surveillance_system.llm.surveillance_llm_gemini import SurveillanceGeminiLLM
@@ -69,7 +71,7 @@ def create_streamlit_app():
 
 def process_surveillance_video(video_path, output_dir="output", api_key=None):
     """
-    Process a surveillance video through the complete pipeline
+    Process a surveillance video through the complete pipeline with action recognition
     
     Args:
         video_path: Path to the video file
@@ -80,11 +82,8 @@ def process_surveillance_video(video_path, output_dir="output", api_key=None):
     os.makedirs(output_dir, exist_ok=True)
 
     surveillance_knowledge_base = SurveillanceKnowledgeBase(api_key=PINECONE_API_KEY)
-    # surveillance_llm = SurveillanceLLM(api_key=ANTHROPIC_API_KEY)
     surveillance_llm_gemini = SurveillanceGeminiLLM(api_key=GEMINI_API_KEY)
     
-    print(surveillance_llm_gemini.test_llm())
-
     print("Extracting video information...")
 
     # Initialize required classes
@@ -94,91 +93,66 @@ def process_surveillance_video(video_path, output_dir="output", api_key=None):
     event_processor = EventProcessor(video_info)
     detection_system = DetectionSystem()
     
-    # Rest of the pipeline remains the same but using initialized classes
+    # Extract frames
     print("Extracting frames...")
     frames_dir = os.path.join(output_dir, "frames")
     frames = extract_frames(video_path, frames_dir)
     
-    print("Processing frames...")
-    events = []
-    for i in range(0, len(frames), 5):
-        # print(f"index: {i}, frame_path: {frame_path}")
+    print("Processing frames with object detection...")
+    detection_results = []
+    
+    # Process frames with object detection
+    for i in range(0, len(frames), 15):
         frame = frames[i]
-        frame = cv2.imread(frame["path"])
-        if frame is None:
+        frame_img = cv2.imread(frame["path"])
+        if frame_img is None:
             print(f"Warning: Could not read image from {frame}, skipping...")
             continue
 
-        enhanced_frame = enhance_frame(frame, False, False)
-
-        timestamp = event_processor.frame_to_timestamp(i)
-        print("Timestamp: ", timestamp)
-
+        enhanced_frame = enhance_frame(frame_img, False, False)
         results = detection_system.process_frame(enhanced_frame)
+        detection_results.append(results)
         
-        # Use event_processor instance
-        # The EventProcessor.process_detection_results expects frame_idx and results
-        current_events = event_processor.process_detection_results(i, results)
-        events.extend(current_events)
-                
         if i % 100 == 0:
             print(f"Processed {i}/{len(frames)} frames")
-        
-    for event in events:
-        print(event)
     
-    # Step 4: Generate event descriptions and summaries
-
-
+    # Initialize action integrator
+    action_integrator = ActionIntegrator()
+    
+    print("Detecting actions in video...")
+    # Process entire video with action recognition
+    actions = action_integrator.process_frames(frames)
+    
+    print(f"Detected {len(actions)} actions")
+    for action in actions[:5]:  # Print sample actions
+        print(f"Action: {action['action']}, Confidence: {action['confidence']:.2f}, Frames: {action['frame_start']}-{action['frame_end']}")
+    
+    # Create regular events from detection results
+    print("Processing events...")
+    events = []
+    for i, results in enumerate(detection_results):
+        frame_idx = i * 15  # Since we're processing every 15th frame
+        current_events = event_processor.process_detection_results(frame_idx, results)
+        events.extend(current_events)
+    
+    # Enhance events with action information
+    enhanced_events = action_integrator.enhance_events_with_actions(events, actions)
+    
+    print(f"Total events identified: {len(enhanced_events)}")
+    
+    # Generate action statistics
+    action_counts = {}
+    for event in enhanced_events:
+        if "actions" in event:
+            for action_info in event["actions"]:
+                action = action_info["action"]
+                action_counts[action] = action_counts.get(action, 0) + 1
+    
+    action_stats = {"action_counts": action_counts}
+    
+    # Generate event descriptions with action information
     print("Generating event descriptions...")
-    # generate for every event
-    # for event in events:
-    #     description = surveillance_llm.generate_event_description(event)
-    #     event_descriptions.append(description)
-
-    # using claude
-    # event_descriptions_map = surveillance_llm.generate_batch_event_descriptions(events, batch_size=len(events) // 4)
-
-    # using gemini
-    event_descriptions_map = surveillance_llm_gemini.generate_batch_event_descriptions(events, batch_size=10)
-
-    event_descriptions = []
-    for event in events:
-        description = event_descriptions_map.get(id(event), None)
-        if description:
-            event_descriptions.append(description)
-    
-    for event_description in event_descriptions:
-        print("event description generated by llm: ", event_description)
-
-    # Step 5: Generate overall summary
-    print("Generating video summary...")
-    summary = surveillance_llm_gemini.generate_events_summary(event_descriptions)
-    
-    # Step 6: Export events to file
-    print("Exporting events...")
-    events_output_path = os.path.join(output_dir, "events.json")
-    event_processor.export_events(event_descriptions, events_output_path)
-    
-    # Step 7: Save summary to file
-    summary_path = os.path.join(output_dir, "summary.txt")
-    with open(summary_path, "w") as f:
-        f.write(summary)
-    
-    # # Step 8: Create Streamlit app for interactive exploration
-    # print("Creating interactive app...")
-    # app_path = os.path.join(output_dir, "app.py")
-    # create_streamlit_app(video_path, frames_dir, events_output_path, summary_path, app_path)
-    
-    # print(f"Processing complete. Results saved to {output_dir}")
-    # print(f"To launch the interactive app, run: streamlit run {app_path}")
-    
-    # return {
-    #     "video_info": video_info,
-    #     "events": events,
-    #     "summary": summary,
-    #     "output_dir": output_dir
-    # }
+    event_descriptions_map = surveillance_llm_gemini.generate_batch_
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process a video file")

@@ -8,3 +8,7 @@ streamlit
 pinecone
 python-dotenv
 google-genai
+torch
+pytorchvideo
+torchvision
+torchaudio

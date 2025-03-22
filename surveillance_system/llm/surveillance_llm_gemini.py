@@ -266,3 +266,131 @@ class SurveillanceGeminiLLM:
             print(response.candidates[0].content.parts[0].text)
         except Exception as e:
             print(f"Error testing Gemini connection: {e}")
+    
+    def generate_event_description_with_actions(self, event):
+        """
+        Generate a description of an event that includes action recognition information.
+        
+        Args:
+            event: Event data including action recognition results
+            
+        Returns:
+            Generated description
+        """
+        # Extract basic event info
+        event_type = event["type"]
+        start_time = event["start_time"]
+        objects = event["objects"]
+        
+        # Extract action info if available
+        action_info = ""
+        if "actions" in event and event["actions"]:
+            primary_action = event["primary_action"]
+            confidence = event["action_confidence"]
+            
+            if confidence > 0.7:
+                action_info = f"The subject is {primary_action}. "
+            elif confidence > 0.5:
+                action_info = f"The subject appears to be {primary_action}. "
+            else:
+                action_info = f"The subject might be {primary_action}, but this is uncertain. "
+                
+            # Add secondary actions if available
+            secondary_actions = []
+            for action in event["actions"][1:3]:  # Top 2 secondary actions
+                if action["confidence"] > 0.4:
+                    secondary_actions.append(action["action"])
+                    
+            if secondary_actions:
+                action_info += f"Other potential activities include {', '.join(secondary_actions)}. "
+        
+        # Craft the prompt
+        prompt = f"""
+        Generate a concise description of a surveillance event.
+        
+        Event Type: {event_type}
+        Time: {start_time}
+        Objects Detected: {', '.join(objects)}
+        {action_info}
+        
+        Please describe this surveillance event in a factual, neutral manner.
+        """
+        
+        # Use regular LLM generation with the enhanced prompt
+        return self.client.messages.create(
+            model=self.model,
+            max_tokens=150,
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": "You are a surveillance system assistant that describes events objectively."},
+                {"role": "user", "content": prompt}
+            ]
+        ).content
+        
+    def generate_batch_event_descriptions_with_actions(self, events, batch_size=10):
+        """
+        Generate descriptions for a batch of events with action recognition.
+        
+        Args:
+            events: List of events with action recognition
+            batch_size: Number of events to process at once
+            
+        Returns:
+            Dictionary mapping event IDs to descriptions
+        """
+        descriptions = {}
+        
+        # Process in batches
+        for i in range(0, len(events), batch_size):
+            batch = events[i:i+batch_size]
+            
+            # Process each event in batch
+            for event in batch:
+                description = self.generate_event_description_with_actions(event)
+                descriptions[id(event)] = description
+                
+        return descriptions
+
+    def generate_events_summary_with_actions(self, event_descriptions, action_stats=None):
+        """
+        Generate a summary of all events, incorporating action recognition.
+        
+        Args:
+            event_descriptions: List of event descriptions
+            action_stats: Optional statistics about actions detected
+            
+        Returns:
+            Summary of events
+        """
+        descriptions_text = "\n".join([f"- {desc}" for desc in event_descriptions])
+        
+        action_info = ""
+        if action_stats:
+            action_counts = action_stats.get("action_counts", {})
+            if action_counts:
+                top_actions = sorted(action_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+                action_info = "Common activities detected: " + ", ".join([f"{action} ({count} times)" for action, count in top_actions])
+        
+        prompt = f"""
+        Generate a comprehensive summary of surveillance footage based on the following event descriptions:
+        
+        {descriptions_text}
+        
+        {action_info}
+        
+        Please summarize:
+        1. Key events and patterns
+        2. Notable subjects or objects
+        3. Any suspicious or unusual activity
+        4. Overall assessment of the surveillance period
+        """
+        
+        return self.client.messages.create(
+            model=self.model,
+            max_tokens=500,
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": "You are a surveillance analysis assistant that summarizes events objectively."},
+                {"role": "user", "content": prompt}
+            ]
+        ).content

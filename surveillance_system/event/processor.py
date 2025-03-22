@@ -18,6 +18,8 @@ import streamlit as st
 from pathlib import Path
 import re
 
+from surveillance_system.event.action_integration import ActionIntegrator
+
 # ========== 4. EVENT PROCESSING ==========
 
 class EventProcessor:
@@ -145,3 +147,76 @@ class EventProcessor:
         
         with open(output_file, 'w') as f:
             json.dump(serializable_events, f, indent=2)
+            
+    def process_with_action_recognition(
+        self, 
+        frames: List[Dict[str, str]], 
+        detection_results: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Process frames with both object detection and action recognition.
+        
+        Args:
+            frames: List of frame dictionaries
+            detection_results: Results from detection system
+            
+        Returns:
+            Enhanced events with action information
+        """
+        # First process with standard event detection
+        events = []
+        for i, result in enumerate(detection_results):
+            current_events = self.process_detection_results(i, result)
+            events.extend(current_events)
+        
+        # Initialize action integrator
+        action_integrator = ActionIntegrator()
+        
+        # Detect actions in frames
+        actions = action_integrator.process_frames(frames)
+        
+        # Enhance events with action information
+        enhanced_events = action_integrator.enhance_events_with_actions(events, actions)
+        
+        return enhanced_events
+    
+    def export_events_with_actions(
+        self, 
+        events: List[Dict[str, Any]], 
+        event_descriptions: List[str], 
+        output_path: str
+    ):
+        """
+        Export events with action information to a JSON file.
+        
+        Args:
+            events: List of events with action information
+            event_descriptions: List of event descriptions
+            output_path: Path to save the JSON file
+        """
+        # Create exportable events with descriptions
+        exportable_events = []
+        
+        for i, event in enumerate(events):
+            event_data = {
+                "id": i,
+                "type": event["type"],
+                "start_time": self.frame_to_timestamp(event["frame_start"]),
+                "end_time": self.frame_to_timestamp(event["frame_end"]),
+                "frame_start": event["frame_start"],
+                "frame_end": event["frame_end"],
+                "objects": event["objects"],
+                "description": event_descriptions[i] if i < len(event_descriptions) else "",
+            }
+            
+            # Add action data if available
+            if "actions" in event:
+                event_data["actions"] = event["actions"]
+                event_data["primary_action"] = event["primary_action"]
+                event_data["action_confidence"] = event["action_confidence"]
+            
+            exportable_events.append(event_data)
+        
+        # Save to JSON
+        with open(output_path, "w") as f:
+            json.dump(exportable_events, f, indent=2)
