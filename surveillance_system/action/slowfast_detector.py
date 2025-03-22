@@ -25,7 +25,10 @@ class Normalize(torch.nn.Module):
         self.std = torch.tensor(std).view(-1, 1, 1)
 
     def forward(self, x):
-        return (x - self.mean) / self.std
+        # Move mean and std to the same device as the input tensor
+        mean = self.mean.to(x.device)
+        std = self.std.to(x.device)
+        return (x - mean) / std
 
 class ShortSideScale(torch.nn.Module):
     def __init__(self, size):
@@ -91,15 +94,26 @@ class SlowFastDetector:
         
         # Load model
         if model_path is None:
-            # Use pretrained SlowFast R50 model
+            # For newer torchvision 0.21+, we need to modify how we load the model
             self.model = create_slowfast(
                 model_num_class=400,  # Kinetics-400 classes by default
-                # pretrained=True
-            ).to(device)
+            )
+            # In newer PyTorchVideo, weights need to be loaded separately if available
+            self.model.to(device)
         else:
             # Load from custom weights
             self.model = create_slowfast(model_num_class=400)
-            self.model.load_state_dict(torch.load(model_path, map_location=device))
+            # Handle different state_dict formats for compatibility
+            try:
+                self.model.load_state_dict(torch.load(model_path, map_location=device))
+            except Exception as e:
+                print(f"Error loading model weights: {e}")
+                # Try alternative loading approach (for older format)
+                checkpoint = torch.load(model_path, map_location=device)
+                if "state_dict" in checkpoint:
+                    self.model.load_state_dict(checkpoint["state_dict"])
+                else:
+                    raise ValueError(f"Could not load model weights: {e}")
             self.model.to(device)
             
         self.model.eval()
@@ -205,37 +219,41 @@ class SlowFastDetector:
         else:
             frames_padded = frames
         
-        clip = self.extract_clip_from_frames(frames_padded, min_frames_needed)
-        
-        # Perform inference
-        with torch.no_grad():
-            slow_pathway, fast_pathway = clip
-            slow_pathway = slow_pathway.unsqueeze(0).to(self.device)
-            fast_pathway = fast_pathway.unsqueeze(0).to(self.device)
+        try:
+            clip = self.extract_clip_from_frames(frames_padded, min_frames_needed)
             
-            output = self.model([slow_pathway, fast_pathway])
-            scores = softmax(output, dim=1)
+            # Perform inference
+            with torch.no_grad():
+                slow_pathway, fast_pathway = clip
+                slow_pathway = slow_pathway.unsqueeze(0).to(self.device)
+                fast_pathway = fast_pathway.unsqueeze(0).to(self.device)
+                
+                output = self.model([slow_pathway, fast_pathway])
+                scores = softmax(output, dim=1)
+                
+            # Convert to predictions
+            scores_np = scores.cpu().numpy()[0]
             
-        # Convert to predictions
-        scores_np = scores.cpu().numpy()[0]
-        
-        # Get top predictions above threshold
-        top_indices = np.where(scores_np > self.confidence_threshold)[0]
-        
-        # Sort by confidence score
-        top_indices = top_indices[np.argsort(-scores_np[top_indices])]
-        
-        # Format results
-        results = []
-        
-        for idx in top_indices:
-            results.append({
-                "action": self.labels[idx],
-                "confidence": float(scores_np[idx]),
-                "action_id": int(idx)
-            })
-        
-        return results
+            # Get top predictions above threshold
+            top_indices = np.where(scores_np > self.confidence_threshold)[0]
+            
+            # Sort by confidence score
+            top_indices = top_indices[np.argsort(-scores_np[top_indices])]
+            
+            # Format results
+            results = []
+            
+            for idx in top_indices:
+                results.append({
+                    "action": self.labels[idx],
+                    "confidence": float(scores_np[idx]),
+                    "action_id": int(idx)
+                })
+            
+            return results
+        except Exception as e:
+            print(f"Error in detect_actions: {e}")
+            return []
     
     def detect_actions_in_video_segment(
         self, 
