@@ -153,3 +153,169 @@ class SlowFastDetector:
         except Exception as e:
             print(f"Error in detect_actions: {e}")
             return []
+            
+    def detect_actions_in_video_segment(
+        self, 
+        frames: List[np.ndarray],
+        window_size: int = 64,
+        stride: int = 16
+    ) -> List[Dict[str, Any]]:
+        """
+        Detect actions in a segment of video frames using sliding windows.
+        
+        Args:
+            frames: List of video frames as numpy arrays
+            window_size: Size of sliding window (number of frames)
+            stride: Step size for sliding window
+            
+        Returns:
+            List of action detections with frame indices
+        """
+        if not frames or len(frames) < self.num_frames:
+            return []
+            
+        # Ensure window size is at least the required number of frames
+        window_size = max(window_size, self.num_frames * self.alpha)
+        
+        # Adjust window size if it's larger than available frames
+        window_size = min(window_size, len(frames))
+        
+        all_detections = []
+        
+        # Slide a window through the frames
+        for start_idx in range(0, len(frames) - window_size + 1, stride):
+            end_idx = start_idx + window_size
+            
+            # Get window of frames
+            window_frames = frames[start_idx:end_idx]
+            
+            # Detect actions in this window
+            actions = self.detect_actions(window_frames)
+            
+            # Add frame indices to detections
+            for action in actions:
+                detection = action.copy()
+                detection["frame_start"] = start_idx
+                detection["frame_end"] = end_idx - 1
+                all_detections.append(detection)
+                
+        return all_detections
+    
+    def detect_actions_with_tracking(
+        self, 
+        frames: List[np.ndarray], 
+        person_detections: List[Dict[str, Any]],
+        crop_padding: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Detect actions for specific tracked people in the video.
+        
+        Args:
+            frames: List of video frames
+            person_detections: List of person detection dicts with bbox info
+            crop_padding: Padding around bounding boxes
+            
+        Returns:
+            List of actions with person IDs
+        """
+        if not frames or not person_detections:
+            return []
+            
+        # Group detections by person ID
+        person_tracks = {}
+        for detection in person_detections:
+            person_id = detection.get("person_id", detection.get("id"))
+            if person_id not in person_tracks:
+                person_tracks[person_id] = []
+            person_tracks[person_id].append(detection)
+            
+        all_actions = []
+        
+        # Process each person track
+        for person_id, detections in person_tracks.items():
+            if len(detections) < self.num_frames * self.alpha:
+                continue
+                
+            # Extract cropped frames for this person
+            person_frames = []
+            frame_indices = []
+            
+            for detection in detections:
+                frame_idx = detection.get("frame_idx")
+                if frame_idx is None or frame_idx >= len(frames):
+                    continue
+                    
+                frame = frames[frame_idx]
+                x1, y1, x2, y2 = self._get_bbox_coords(detection, frame.shape, crop_padding)
+                
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                    
+                cropped_frame = frame[y1:y2, x1:x2]
+                if cropped_frame.size == 0:
+                    continue
+                    
+                # Resize to ensure consistent dimensions
+                cropped_frame = cv2.resize(cropped_frame, (224, 224))
+                
+                person_frames.append(cropped_frame)
+                frame_indices.append(frame_idx)
+                
+            # Skip if not enough frames
+            if len(person_frames) < self.num_frames * self.alpha:
+                continue
+                
+            # Detect actions for this person
+            actions = self.detect_actions(person_frames)
+            
+            # Add person ID and frame index information
+            for action in actions:
+                action["person_id"] = person_id
+                action["frame_start"] = frame_indices[0]
+                action["frame_end"] = frame_indices[-1]
+                all_actions.append(action)
+                
+        return all_actions
+        
+    def _get_bbox_coords(
+        self, 
+        detection: Dict[str, Any], 
+        frame_shape: Tuple[int, int, int],
+        padding: int = 10
+    ) -> Tuple[int, int, int, int]:
+        """
+        Extract bbox coordinates from detection with padding.
+        
+        Args:
+            detection: Detection dictionary
+            frame_shape: Shape of the frame
+            padding: Padding to add around bbox
+            
+        Returns:
+            Tuple of (x1, y1, x2, y2) coordinates
+        """
+        height, width = frame_shape[:2]
+        
+        # Handle different bbox formats
+        if "bbox" in detection:
+            bbox = detection["bbox"]
+            if len(bbox) == 4:
+                x1, y1, x2, y2 = bbox
+            elif len(bbox) == 4 and isinstance(bbox[2], int) and isinstance(bbox[3], int):
+                x1, y1, w, h = bbox
+                x2, y2 = x1 + w, y1 + h
+        elif all(k in detection for k in ["x1", "y1", "x2", "y2"]):
+            x1, y1, x2, y2 = detection["x1"], detection["y1"], detection["x2"], detection["y2"]
+        elif all(k in detection for k in ["left", "top", "right", "bottom"]):
+            x1, y1, x2, y2 = detection["left"], detection["top"], detection["right"], detection["bottom"]
+        else:
+            # Default to full frame if no bbox found
+            return 0, 0, width, height
+            
+        # Add padding
+        x1 = max(0, x1 - padding)
+        y1 = max(0, y1 - padding)
+        x2 = min(width, x2 + padding)
+        y2 = min(height, y2 + padding)
+        
+        return int(x1), int(y1), int(x2), int(y2)
