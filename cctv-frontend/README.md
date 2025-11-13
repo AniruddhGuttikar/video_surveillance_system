@@ -1,12 +1,26 @@
-# React + Vite
+## Development — running the frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This project uses pnpm + Vite for the frontend. The steps below will install dependencies and start a development server with hot module reloading.
 
-Currently, two official plugins are available:
+1. Install dependencies (uses pnpm):
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+```bash
+pnpm install
+```
 
-## Expanding the ESLint configuration
+2. Start the dev server:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+pnpm run dev
+```
+
+Notes:
+
+- The dev server runs via Vite and typically serves on http://localhost:5173 (the exact port will be printed when you run `pnpm run dev`).
+- If you don't have pnpm installed, install it with npm: `npm install -g pnpm` or use your preferred package manager.
+- For production builds use `pnpm run build` and then `pnpm run preview` to locally preview the build.
+
+Troubleshooting:
+
+- If port conflicts occur, pass a different port to Vite: `pnpm run dev -- --port 3000`.
+- If you run into permission issues installing global packages, prefer a node version manager (nvm, asdf) or use `corepack` to enable pnpm bundled with Node.js.
