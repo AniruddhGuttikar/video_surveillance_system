@@ -41,4 +41,4 @@ CLIPS_FOLDER: str = "clips"
 TEMP_FOLDER: str = "temp"
 
 # --- ALERTING ---
-ALERT_COOLDOWN_SECONDS = 60
+ALERT_COOLDOWN_SECONDS = 600  # 10 minutes

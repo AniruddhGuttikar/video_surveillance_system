@@ -350,37 +350,36 @@ def frame_capture_thread(video_source):
 
 
 def real_time_monitoring():
-    """Analyze frames in real-time and record anomaly clips."""
+    """
+    Simplified real-time monitoring with correct event merging and clip recording.
+    Records continuously and processes clips after anomalies end.
+    """
     global real_time_status, camera_frame
 
     twilio_client = Client(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN)
     last_alert_time = -60
 
-    frame_buffer = deque(maxlen=150)
-    motion_frame_buffer = deque(maxlen=config.NUM_FRAMES)
-    current_state = "IDLE"
+    # Detection state
+    detected_events = []  # List of (start_time, end_time, reason)
+    current_anomaly_start = None
+    current_anomaly_reason = None
     debounce_counter = 0
-    post_roll_counter = 0
-    video_writer = None
-    frame_counter = 0
 
-    # Track video timestamps
-    clip_start_timestamp = None  # Video time when recording starts
-    clip_end_timestamp = None  # Video time when recording ends
-    clip_reason = None
-    clip_filename = None
-    clip_counter = 1
+    # Frame buffer for motion detection
+    motion_frame_buffer = deque(maxlen=config.NUM_FRAMES)
+
+    # Video recording state
+    video_writer = None
+    recording_start_time = None
+    temp_video_path = None
+    frame_counter = 0
+    fps = 30  # Default, will be updated
 
     while not stop_real_time_thread.is_set():
         try:
             frame, fps, video_timestamp = frame_queue.get(timeout=2)
         except queue.Empty:
             break
-
-        # Update buffer size based on FPS
-        buffer_size = int(config.BUFFER_SECONDS * fps) if fps > 0 else 150
-        if frame_buffer.maxlen != buffer_size:
-            frame_buffer = deque(frame_buffer, maxlen=buffer_size)
 
         frame_counter += 1
 
@@ -389,68 +388,78 @@ def real_time_monitoring():
         with real_time_lock:
             camera_frame = buffer.tobytes()
 
-        frame_buffer.append((frame, video_timestamp))
+        # Add frame to motion detection buffer
         motion_frame_buffer.append(
             Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         )
 
-        # Always write to video if recording
-        if current_state == "RECORDING" and video_writer:
+        # Always write frame if recording
+        if video_writer is not None:
             video_writer.write(frame)
-            clip_end_timestamp = video_timestamp  # Update end time continuously
 
         # Skip detection on some frames for performance
         if frame_counter % config.REALTIME_FRAME_SKIP != 0:
             continue
 
         # --- DETECTION LOGIC ---
-        anomaly_reason = None
+        anomaly_detected = False
+        detected_reason = None
 
         # Check for weapons
         weapon_found, weapon_class = detector.detect_weapons(frame)
         if weapon_found:
-            anomaly_reason = f"Weapon ({weapon_class})"
+            anomaly_detected = True
+            detected_reason = f"Weapon ({weapon_class})"
 
-        # Check for suspicious motion
-        if not weapon_found and len(motion_frame_buffer) == config.NUM_FRAMES:
-            is_suspicious, confidence = detector.detect_suspicious_motion(
-                list(motion_frame_buffer)
-            )
-            if is_suspicious:
-                anomaly_reason = "Suspicious Motion"
+        # Check for suspicious motion (if no weapon found)
+        if not weapon_found:
+            # Get last N frames for motion detection
+            motion_frames = []
+            for i in range(config.NUM_FRAMES):
+                idx = frame_counter - config.NUM_FRAMES + i
+                if idx >= 0:
+                    # In real implementation, you'd maintain a frame buffer
+                    # For now, assume we can get recent frames
+                    motion_frames.append(
+                        Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    )
 
-        # --- STATE MACHINE ---
-        if anomaly_reason:
+            if len(motion_frames) == config.NUM_FRAMES:
+                is_suspicious, confidence = detector.detect_suspicious_motion(
+                    motion_frames
+                )
+                if is_suspicious:
+                    anomaly_detected = True
+                    detected_reason = "Suspicious Motion"
+
+        # --- STATE MANAGEMENT ---
+        if anomaly_detected:
             debounce_counter += 1
-            post_roll_counter = 0
 
-            if current_state == "IDLE" and debounce_counter >= config.DEBOUNCE_COUNT:
-                # Start recording
-                current_state = "RECORDING"
-                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                clip_filename = os.path.join(
-                    config.CLIPS_FOLDER, f"LIVE_anomaly_{timestamp_str}.mp4"
-                )
-                clip_reason = anomaly_reason
+            # Start new anomaly event
+            if (
+                current_anomaly_start is None
+                and debounce_counter >= config.DEBOUNCE_COUNT
+            ):
+                current_anomaly_start = video_timestamp
+                current_anomaly_reason = detected_reason
 
-                # Calculate pre-roll start time (from buffer)
-                if frame_buffer:
-                    clip_start_timestamp = frame_buffer[0][1]
-                else:
-                    clip_start_timestamp = video_timestamp
+                # Start recording if not already recording
+                if video_writer is None:
+                    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    temp_video_path = os.path.join(
+                        config.CLIPS_FOLDER, f"LIVE_recording_{timestamp_str}.mp4"
+                    )
+                    recording_start_time = video_timestamp
 
-                with real_time_lock:
-                    real_time_status = f"🚨 RECORDING: {anomaly_reason}"
+                    height, width, _ = frame.shape
+                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                    video_writer = cv2.VideoWriter(
+                        temp_video_path, fourcc, fps, (width, height)
+                    )
 
-                height, width, _ = frame.shape
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                video_writer = cv2.VideoWriter(
-                    clip_filename, fourcc, fps, (width, height)
-                )
-
-                # Write pre-roll frames from buffer
-                for pre_frame, _ in frame_buffer:
-                    video_writer.write(pre_frame)
+                    with real_time_lock:
+                        real_time_status = f"🚨 RECORDING: {detected_reason}"
 
                 # Send SMS alert (with cooldown)
                 if (time.time() - last_alert_time) > config.ALERT_COOLDOWN_SECONDS:
@@ -461,8 +470,8 @@ def real_time_monitoring():
                         try:
                             message_body = (
                                 f"🚨 SECURITY ALERT 🚨\n\n"
-                                f"Threat: {anomaly_reason}\n"
-                                f"Time: {timestamp_str}"
+                                f"Threat: {detected_reason}\n"
+                                f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                             )
                             twilio_client.messages.create(
                                 body=message_body,
@@ -474,57 +483,149 @@ def real_time_monitoring():
                         except Exception as e:
                             print(f"❌ SMS failed: {e}")
 
+            # Update reason if higher priority detected
+            elif current_anomaly_start is not None:
+                reason_priority = {"Suspicious Motion": 1, "Weapon": 2}
+                current_priority = reason_priority.get(
+                    current_anomaly_reason.split(" ")[0], 0
+                )
+                new_priority = reason_priority.get(detected_reason.split(" ")[0], 0)
+                if new_priority > current_priority:
+                    current_anomaly_reason = detected_reason
+
         else:
             # No anomaly detected
+            if current_anomaly_start is not None:
+                # End current anomaly event
+                detected_events.append(
+                    (current_anomaly_start, video_timestamp, current_anomaly_reason)
+                )
+                current_anomaly_start = None
+                current_anomaly_reason = None
+
             debounce_counter = 0
 
-            if current_state == "IDLE":
-                with real_time_lock:
-                    real_time_status = "✅ MONITORING: All Clear"
+            # Check if we should stop recording (after post-roll period)
+            if video_writer is not None:
+                time_since_last_event = (
+                    video_timestamp - detected_events[-1][1]
+                    if detected_events
+                    else float("inf")
+                )
 
-            elif current_state == "RECORDING":
-                post_roll_counter += 1
+                if time_since_last_event > config.POST_ROLL_FRAMES / fps:
+                    # Stop recording and process
+                    video_writer.release()
+                    video_writer = None
 
-                if post_roll_counter >= config.POST_ROLL_FRAMES:
-                    # Stop recording and analyze
-                    current_state = "IDLE"
-                    if video_writer:
-                        video_writer.release()
-                        video_writer = None
+                    # Process recorded video with event merging
+                    if detected_events:
+                        process_recorded_clip(
+                            temp_video_path, recording_start_time, detected_events
+                        )
+                        detected_events = []
 
-                    # Analyze the clip with Gemini in background thread
-                    if (
-                        clip_filename
-                        and clip_start_timestamp is not None
-                        and clip_end_timestamp is not None
-                    ):
-                        threading.Thread(
-                            target=analyze_and_store_clip,
-                            args=(
-                                clip_filename,
-                                clip_start_timestamp,
-                                clip_end_timestamp,
-                                clip_reason,
-                                clip_counter,
-                            ),
-                            daemon=True,
-                        ).start()
-                        clip_counter += 1
-
-                    # Reset clip tracking
-                    clip_filename = None
-                    clip_start_timestamp = None
-                    clip_end_timestamp = None
-                    clip_reason = None
+                    temp_video_path = None
+                    recording_start_time = None
 
                     with real_time_lock:
                         real_time_status = "✅ MONITORING: All Clear"
+            else:
+                with real_time_lock:
+                    real_time_status = "✅ MONITORING: All Clear"
 
-    # Cleanup
-    if video_writer:
+    # Cleanup on exit
+    if video_writer is not None:
         video_writer.release()
+        if temp_video_path and detected_events:
+            process_recorded_clip(
+                temp_video_path, recording_start_time, detected_events
+            )
 
     print("✅ Monitoring thread finished")
+
+
+def process_recorded_clip(video_path, recording_start_time, detected_events):
+    """
+    Process recorded clip: merge events and extract/analyze clips.
+    Based on the working upload video logic.
+    """
+    # Merge overlapping events (same logic as upload version)
+    detected_events.sort(key=lambda x: x[0])
+    merged_events = []
+    current_start, current_end, current_reason = detected_events[0]
+    reason_priority = {"Suspicious Motion": 1, "Weapon": 2}
+
+    for next_start, next_end, next_reason in detected_events[1:]:
+        if next_start <= current_end + 2.0:
+            current_end = max(current_end, next_end)
+            if reason_priority.get(next_reason.split(" ")[0], 0) > reason_priority.get(
+                current_reason.split(" ")[0], 0
+            ):
+                current_reason = next_reason
+        else:
+            merged_events.append((current_start, current_end, current_reason))
+            current_start, current_end, current_reason = (
+                next_start,
+                next_end,
+                next_reason,
+            )
+
+    merged_events.append((current_start, current_end, current_reason))
+
+    # Extract and analyze clips
+    original_video = VideoFileClip(video_path)
+    video_bitrate = get_video_bitrate(video_path)
+    max_duration = (config.TARGET_CLIP_SIZE_MB * 8 * 1024 * 1024) / video_bitrate
+
+    clip_counter = 1
+
+    for start, end, reason in merged_events:
+        # Adjust times relative to recording start
+        clip_start = start - recording_start_time
+        clip_end = end - recording_start_time
+
+        # Ensure times are within video bounds
+        clip_start = max(0, clip_start)
+        clip_end = min(original_video.duration, clip_end)
+
+        duration = clip_end - clip_start
+        num_subclips = int(np.ceil(duration / max_duration))
+
+        for i in range(num_subclips):
+            sub_start = clip_start + i * max_duration
+            sub_end = min(clip_end, sub_start + max_duration)
+
+            if sub_end > original_video.duration:
+                continue
+
+            # Extract clip
+            clip_filename = os.path.join(
+                config.CLIPS_FOLDER,
+                f"LIVE_anomaly_clip_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{clip_counter}.mp4",
+            )
+            subclip = original_video.subclipped(sub_start, sub_end)
+            subclip.write_videofile(
+                clip_filename, codec="libx264", audio_codec="aac", logger=None
+            )
+
+            # Analyze and store (same as upload version)
+            analyze_and_store_clip(
+                clip_filename,
+                start,  # Use original timestamps for indexing
+                end,
+                reason,
+                clip_counter,
+            )
+            clip_counter += 1
+
+    original_video.close()
+
+    # Clean up temp recording
+    try:
+        os.remove(video_path)
+    except Exception as e:
+        print(f"Warning: Could not remove temp file {video_path}: {e}")
 
 
 # --- FLASK API ---

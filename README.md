@@ -12,19 +12,23 @@ AI-powered video surveillance system that detects weapons and suspicious motion,
 
 ## Project Structure
 
-```
+````
 anomaly-detection-system/
 ├── pyproject.toml          # uv project configuration
 ├── .env                    # Environment variables (create from .env.example)
-├── config.py               # All configuration constants
-├── models.py               # YOLO + VideoMAE wrapper
-├── gemini_service.py       # Gemini video analysis
-├── vector_db.py            # Qdrant operations
-├── app.py                  # Main Flask application
+├── src/
+│   └── video_surveillance_system/
+│       ├── config.py               # All configuration constants
+│       ├── anomaly_models.py       # YOLO + VideoMAE wrapper
+│       ├── gemini_service.py       # Gemini video analysis
+│       ├── vector_db.py            # Qdrant operations
+│       └── app.py                  # Main Flask application
 ├── uploads/                # Uploaded videos
 ├── clips/                  # Extracted anomaly clips
-└── temp/                   # Temporary processing files
-```
+├── temp/                   # Temporary processing files
+└── models/                 # Anomaly models
+
+
 
 ## Setup
 
@@ -32,7 +36,7 @@ anomaly-detection-system/
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+````
 
 ### 2. Create project and install dependencies
 
@@ -46,7 +50,7 @@ uv add flask flask-cors opencv-python torch torchvision transformers ultralytics
 
 ### 3. Download required models
 
-Place these files in the project root:
+Place these files in models directory:
 
 - `Guns-100-11m.pt` - YOLO weapon detection model
 - `videomae_model_A_binary.pth` - VideoMAE motion detection model
@@ -67,7 +71,7 @@ Required API keys:
 ### 5. Run the application
 
 ```bash
-uv run python app.py
+uv run src/video_surveillance_system/app.py
 ```
 
 The server will start on `http://0.0.0.0:5001`
