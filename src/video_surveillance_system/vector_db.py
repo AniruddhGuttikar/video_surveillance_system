@@ -34,9 +34,7 @@ class VectorDB:
             print(f"Attempting to recreate collection: {self.collection_name}")
             self.client.recreate_collection(
                 collection_name=self.collection_name,
-                vectors_config={
-                    "embedding": VectorParams(size=768, distance=Distance.COSINE)
-                },
+                vectors_config=VectorParams(size=768, distance=Distance.COSINE),
             )
             print(f"Created collection: {self.collection_name}")
 
